@@ -1,4 +1,4 @@
-from geventmemcache import MemcacheError, MemcacheResult
+from geventmemcache import MemcacheError, MemcacheResult, MemcacheBinResult
 from geventmemcache.codec import MemcacheCodec
 import struct
 
@@ -194,25 +194,6 @@ class MemcacheTextProtocol(MemcacheProtocol):
 PROTOCOL_BINARY_REQUEST = 0x80 # Request packet for this protocol version
 PROTOCOL_BINARY_RESPONSE = 0x81 # Response packet for this protocol version
 
-## Response Status - See section 3.2
-PROTOCOL_BINARY_RESPONSE_SUCCESS = 0x00 # No error
-PROTOCOL_BINARY_RESPONSE_KEY_ENOENT = 0x01 # Key not found
-PROTOCOL_BINARY_RESPONSE_KEY_EEXISTS = 0x02 # Key exists
-PROTOCOL_BINARY_RESPONSE_E2BIG = 0x03 # Value too large
-PROTOCOL_BINARY_RESPONSE_EINVAL = 0x04 # Invalid arguments
-PROTOCOL_BINARY_RESPONSE_NOT_STORED = 0x05 # Item not stored
-PROTOCOL_BINARY_RESPONSE_DELTA_BADVAL = 0x06 # Incr/Decr on non-numeric value.
-
-PROTOCOL_BINARY_RESPONSE_NOT_MY_VBUCKET = 0x07
-PROTOCOL_BINARY_RESPONSE_AUTH_ERROR = 0x20
-PROTOCOL_BINARY_RESPONSE_AUTH_CONTINUE = 0x21
-PROTOCOL_BINARY_RESPONSE_UNKNOWN_COMMAND = 0x81 # Unknown command
-PROTOCOL_BINARY_RESPONSE_ENOMEM = 0x82 # Out of memory
-PROTOCOL_BINARY_RESPONSE_NOT_SUPPORTED = 0x83
-PROTOCOL_BINARY_RESPONSE_EINTERNAL = 0x84
-PROTOCOL_BINARY_RESPONSE_EBUSY = 0x85
-PROTOCOL_BINARY_RESPONSE_ETMPFAIL = 0x86
-
 PROTOCOL_BINARY_CMD_GET = 0x00
 PROTOCOL_BINARY_CMD_SET = 0x01
 PROTOCOL_BINARY_CMD_ADD = 0x02
@@ -304,8 +285,7 @@ class MemcacheBinaryProtocol(MemcacheTextProtocol):
     def _read_result(self, reader, value = None):
         response_line = reader.read_bytes_available()
         header = self._unpack_header(response_line[:24])
-
-        return MemcacheResult.get(response_line), value
+        return MemcacheBinResult.get(header['status']), value
 
     def _write_storage(self, writer, cmd, key, value, extras, cas_unique = None):
         header = struct.pack(
@@ -316,10 +296,11 @@ class MemcacheBinaryProtocol(MemcacheTextProtocol):
             len(extras),
             PROTOCOL_BINARY_RAW_BYTES,
             0x00,
-            len(key) + len(value) + len(extras),
+            len(str(key)) + len(str(value)) + len(extras),
             0x00,
             0x00
         )
+
         writer.write_bytes("%s%s%s%s" % (header, extras, key, value))
 
     def write_incr(self, writer, key, value):
@@ -364,16 +345,17 @@ class MemcacheBinaryProtocol(MemcacheTextProtocol):
         while True:
             response_line = reader.read_bytes_available()
             header = self._unpack_header(response_line[:24])
+            mem_result = MemcacheBinResult.get(header['status'])
 
-            if header['status'] == PROTOCOL_BINARY_RESPONSE_SUCCESS:
+            if mem_result == MemcacheResult.OK:
                 key_begin = MemcacheBinaryProtocol.HEADER_LENGTH + header['extra_length']
                 key_end = key_begin + header['key_length']
                 key = response_line[key_begin:key_end]
                 value = response_line[key_end:]
                 result[key] = value
                 return MemcacheResult.OK, result
-            elif header['status'] == PROTOCOL_BINARY_RESPONSE_KEY_ENOENT:
-                return MemcacheResult.OK, {}
+            elif mem_result == MemcacheResult.NOT_FOUND:
+                return MemcacheBinResult.OK, {}
 
     def write_delete(self, writer, key, expiration):
         self._check_keys([key])
