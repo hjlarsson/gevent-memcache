@@ -194,6 +194,7 @@ class MemcacheTextProtocol(MemcacheProtocol):
 PROTOCOL_BINARY_REQUEST = 0x80 # Request packet for this protocol version
 PROTOCOL_BINARY_RESPONSE = 0x81 # Response packet for this protocol version
 
+## Command Opcodes - See section 3.3
 PROTOCOL_BINARY_CMD_GET = 0x00
 PROTOCOL_BINARY_CMD_SET = 0x01
 PROTOCOL_BINARY_CMD_ADD = 0x02
@@ -256,16 +257,15 @@ PROTOCOL_BINARY_CMD_TAP_OPAQUE = 0x44
 PROTOCOL_BINARY_CMD_TAP_VBUCKET_SET = 0x45
 PROTOCOL_BINARY_CMD_TAP_CHECKPOINT_START = 0x46
 PROTOCOL_BINARY_CMD_TAP_CHECKPOINT_END = 0x47
-
 PROTOCOL_BINARY_CMD_LAST_RESERVED = 0xef
-
 PROTOCOL_BINARY_CMD_SCRUB = 0xf0
 
+## Data Types - See section 3.4
 PROTOCOL_BINARY_RAW_BYTES = 0x00 # Raw bytes
 
-PROTOCOL_BINARY_HEADER_FORMAT = "!BBHBBHIIQ"
-PROTOCOL_BINARY_READ_EXRAS_FORMAT = "!I"
-PROTOCOL_BINARY_WRITE_EXRAS_FORMAT = "!II"
+PROTOCOL_BINARY_HEADER_FORMAT = "!BBHBBHIIQ" # Header format for binary protocol
+PROTOCOL_BINARY_READ_EXRAS_FORMAT = "!I" # format for extra field with reading operation
+PROTOCOL_BINARY_WRITE_EXRAS_FORMAT = "!II" # format for extra field with writing operation
 
 class MemcacheBinaryProtocol(MemcacheTextProtocol):
     HEADER_LENGTH = struct.calcsize(PROTOCOL_BINARY_HEADER_FORMAT)
@@ -305,10 +305,7 @@ class MemcacheBinaryProtocol(MemcacheTextProtocol):
 
     def write_incr(self, writer, key, value):
         extras = struct.pack(
-            "!QQI",
-            value,
-            0,
-            0x00000e10
+            "!QQI", value, 0, 0
         )
         self._write_storage(writer, PROTOCOL_BINARY_CMD_INCREMENT, key, "", extras, "")
 
@@ -317,10 +314,7 @@ class MemcacheBinaryProtocol(MemcacheTextProtocol):
 
     def write_decr(self, writer, key, value):
         extras = struct.pack(
-            "!QQI",
-            value,
-            0,
-            0x00000e10
+            "!QQI", value, 0, 0
         )
         self._write_storage(writer, PROTOCOL_BINARY_CMD_DECREMENT, key, "", extras, "")
 
@@ -328,11 +322,6 @@ class MemcacheBinaryProtocol(MemcacheTextProtocol):
         return self._read_result(reader)
 
     def write_get(self, writer, keys):
-        extras = struct.pack(
-            PROTOCOL_BINARY_READ_EXRAS_FORMAT,
-            0xdeadbeef,
-        )
-
         ## FIXME: 
         # for key in keys[:-1]:
         #     self._write_storage(writer, PROTOCOL_BINARY_CMD_GETKQ, key, "", "")
@@ -367,8 +356,8 @@ class MemcacheBinaryProtocol(MemcacheTextProtocol):
     def write_set(self, writer, key, value, expiration, flags):
         extras = struct.pack(
             PROTOCOL_BINARY_WRITE_EXRAS_FORMAT,
-            0xdeadbeef,
-            0x00000e10
+            flags,
+            expiration
         )
         return self._write_storage(writer, PROTOCOL_BINARY_CMD_SET, key, value, extras)
 
@@ -378,8 +367,8 @@ class MemcacheBinaryProtocol(MemcacheTextProtocol):
     def write_add(self, writer, key, value, expiration, flags):
         extras = struct.pack(
             PROTOCOL_BINARY_WRITE_EXRAS_FORMAT,
-            0xdeadbeef,
-            0x00000e10
+            flags,
+            expiration
         )
         return self._write_storage(writer, PROTOCOL_BINARY_CMD_ADD, key, value, extras)
 
@@ -389,8 +378,8 @@ class MemcacheBinaryProtocol(MemcacheTextProtocol):
     def write_replace(self, writer, key, value, expiration, flags):
         extras = struct.pack(
             PROTOCOL_BINARY_WRITE_EXRAS_FORMAT,
-            0xdeadbeef,
-            0x00000e10
+            flags,
+            expiration
         )
         return self._write_storage(writer, PROTOCOL_BINARY_CMD_REPLACE, key, value, extras)
 
@@ -404,12 +393,36 @@ class MemcacheBinaryProtocol(MemcacheTextProtocol):
         return self._read_result(reader)
 
     def write_prepend(self, writer, key, value, expiration, flags):
-        extras = struct.pack(
-            PROTOCOL_BINARY_WRITE_EXRAS_FORMAT,
-            0xdeadbeef,
-            0x00000e10
-        )
-        return self._write_storage(writer, PROTOCOL_BINARY_CMD_PREPEND, key, value, extras)
+        return self._write_storage(writer, PROTOCOL_BINARY_CMD_PREPEND, key, value, "")
 
     def read_prepend(self, reader):
         return self._read_result(reader)
+
+    def write_stats(self, writer):
+        return self._write_storage(writer, PROTOCOL_BINARY_CMD_STAT, "", "", "")
+
+    def read_stats(self, reader):
+        result = {}
+
+        while True:
+            response_line = reader.read_bytes_available()
+            header = self._unpack_header(response_line[:24])
+            mem_result = MemcacheBinResult.get(header['status'])
+            
+            if mem_result == MemcacheResult.OK:
+                key_begin = MemcacheBinaryProtocol.HEADER_LENGTH + header['extra_length']
+                key_end = key_begin + header['key_length']
+                val_end = key_end + header['total_body'] - header['key_length']
+                key = response_line[key_begin:key_end]
+                value = response_line[key_end:val_end]
+                result[key] = value
+                return MemcacheResult.OK, result
+            else:
+                return MemcacheBinResult.ERROR, {}
+
+    def write_cas(self, writer, key, value, expiration, flags):
+        raise NotImplementedError('"cas" is not implemented.')
+
+    def write_gets(self, writer, key, value, expiration, flags):
+        raise NotImplementedError('"gets" is not implemented.')
+
