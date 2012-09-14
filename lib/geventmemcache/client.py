@@ -230,7 +230,7 @@ class MemcacheConnectionManager(object):
     def get_connection(self, address, protocol):
         """gets a connection to memcached servers at given address using given protocol."""
         if not address in self._connections:
-            self._connections[address] = MemcacheConnection(address, protocol)
+            self._connections[address] = MemcacheConnection(address, protocol,protocol._codec)
 
         return self._connections[address]
 
